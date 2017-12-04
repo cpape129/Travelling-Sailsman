@@ -122,7 +122,7 @@ function draw_boat(min_x, min_y, max_x, max_y, num, xcoords, ycoords, numcols, c
     }
 }
 
-function draw_landmarks(min_x, min_y, max_x, max_y, num, xcoords, ycoords, num_on_targets, maxnum) {
+function draw_landmarks(min_x, min_y, max_x, max_y, num, xcoords, ycoords, num_on_targets, g3_visit, maxnum) {
     var ctx = document.getElementById('canvas').getContext('2d');
     for(var i = 0 ; i < num ; ++ i) {
         ctx.beginPath();
@@ -141,6 +141,8 @@ function draw_landmarks(min_x, min_y, max_x, max_y, num, xcoords, ycoords, num_o
         ctx.stroke();
         var gb =parseInt(255 - 255 * (maxnum - num_on_targets[i])/maxnum);
         var col="rgb(255," + gb +", " + gb + ")";
+		if(g3_visit[i] == 1)
+			col = "purple";
         console.log(i + ": "+gb);
         ctx.fillStyle = col;
         ctx.fill();
@@ -325,6 +327,10 @@ function process(data)
     for(var i = 0; i < t; ++ i) {
         num_on_targets[i] = Number(data[cur++]);
     }
+	var g3_visit = new Array(t);
+    for(var i = 0; i < t; ++ i) {
+        g3_visit[i] = Number(data[cur++]);
+    }
     var windx = Number(data[cur++]);
     var windy = Number(data[cur++]);
     var refresh = Number(data[cur++]);
@@ -343,7 +349,7 @@ function process(data)
     // draw for 1st player
     var colors = ["orange",  "purple", "green", "darkblue", "black","lightseagreen", "darkgoldenrod"];
     
-    draw_landmarks(minx, miny, maxx, maxy, t, tx, ty, num_on_targets, n);
+    draw_landmarks(minx, miny, maxx, maxy, t, tx, ty, num_on_targets,g3_visit, n);
     draw_dots(minx, miny, maxx, maxy, n, initplayerx, initplayery, 1, ["black"], true);
     draw_boat(minx, miny, maxx, maxy, n, playerx, playery, 7, colors);
     draw_side ( 10,  40,  190, 690, n, groups, colors, scores, windx, windy, sorted_groups);

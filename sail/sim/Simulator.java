@@ -669,6 +669,11 @@ public class Simulator {
       }
       buffer += num +", ";
     }
+	for(int i = 0 ; i < t; ++i) {
+      int num = 0;
+        num = (visited_set.get(2).contains(i)==true? 1:0);
+      buffer += num +", ";
+    }
     buffer += wind_direction.x + ", " + wind_direction.y + ", ";
     buffer += gui_refresh;
     return buffer;
