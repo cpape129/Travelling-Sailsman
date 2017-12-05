@@ -18,21 +18,25 @@ public class Player extends sail.sim.Player {
     List<Point> groupLocations;
     int currentTargetIdx;
     HashMap<Point, List<Point>> nnMap;
-    FrequencyBucket currentBucket;
-    int currentBucketi;
-    int currentBucketj;
-
-    FrequencyBucket[][] frequencyBucket;
-
+    HashMap<Point, Integer> targetNumMap;
+    
+    private void buildTargetNumMap(List<Point> targets) {
+        for (int i = 0; i < targets.size(); i++) {
+            this.targetNumMap.put(targets.get(i), i);
+        }
+    }
+    
+    public int numOfTarget(Point target) {
+        return targetNumMap.get(target);
+    }
 
     public void calculateNearestNeighbors() {
-        final int K = 5;
         for (int i = 0; i < this.targets.size(); i++) {
             Point target = targets.get(i);
-            PriorityQueue<Point> neighbors = new PriorityQueue<Point>(5, new Comparator<Point>() {
+            PriorityQueue<Point> neighbors = new PriorityQueue<Point>(this.targets.size() - 1, new Comparator<Point>() {
                 @Override
                 public int compare(Point o1, Point o2) {
-                    return new Double(approximateTimeToTarget(target, o2)).compareTo(approximateTimeToTarget(target, o1));
+                    return new Double(approximateTimeToTarget(target, o1)).compareTo(approximateTimeToTarget(target, o2));
                 }
             });
             for (int j = 0; j < this.targets.size(); j++) {
@@ -41,16 +45,23 @@ public class Player extends sail.sim.Player {
                 }
                 Point neighbor = targets.get(j);
                 neighbors.add(neighbor);
-                if (neighbors.size() > K) {
-                    neighbors.poll();
-                }
             }
-            List<Point> neighborsList = new ArrayList<Point>(neighbors);
+            List<Point> neighborsList = new ArrayList<Point>(neighbors.size());
+            while (neighbors.size() > 0) {
+                neighborsList.add(neighbors.poll());
+            }
             this.nnMap.put(target, neighborsList);
+            
+            System.out.println("Target " + i + ": (" + target.x + ", " + target.y + ")");
+            for (Point neighbor : neighborsList) {
+                System.out.println("\t(" + neighbor.x + ", " + neighbor.y + ") - " + approximateTimeToTarget(target, neighbor));
+            }
+            System.out.println("--------------------");
         }
     }
 
-    public boolean playerWillReachTargetFirst(int p, Point target, int targetNum) {
+    public boolean playerWillReachTargetFirst(int p, Point target) {
+        int targetNum = numOfTarget(target);
         if (visited_set.get(p).contains(targetNum)) {
             return true;
         }
@@ -78,27 +89,45 @@ public class Player extends sail.sim.Player {
         return Math.abs(Point.angleBetweenVectors(playerMove, towardTarget)) < Math.PI / 6.0;
     }
 
-    private int estimatedValue(Point target, int targetNum) {
-        if (targetNum == -1) {
-            targetNum = this.targets.indexOf(target);
-        }
-        if (visited_set.get(id).contains(targetNum)) {
+    private int estimatedValue(Point target) {
+        if (visited_set.get(id).contains(numOfTarget(target))) {
             return 0;
         }
         int value = numPlayers;
         for (int p = 0; p < numPlayers; p++) {
-            if (playerWillReachTargetFirst(p, target, targetNum)) {
+            if (playerWillReachTargetFirst(p, target)) {
                 value--;
             }
         }
         return value;
+    }
+    
+    private double estimatedAmortizedValue(Point from, Point target, int order, List<Point> excluding, double distance, int value) {
+        if (order == 1) {
+            return value / Math.pow(distance, 2.0);
+        }
+        List<Point> neighbors = nnMap.get(target);
+        double max = 0.0;
+        for (Point neighbor : neighbors) {
+            if (excluding.contains(neighbor)) {
+                continue;
+            }
+            excluding.add(neighbor);
+            double neighborVal = estimatedAmortizedValue(target, neighbor, order - 1, excluding, distance + approximateTimeToTarget(target, neighbor), value + estimatedValue(neighbor));
+            excluding.remove(excluding.size() - 1);
+            if (neighborVal > max) {
+                max = neighborVal;
+            }
+        }
+        double UNCERTAINTY_FACTOR = 1.0;
+        return max;
     }
 
     private double nnAdjustment(Point target, int targetNum) {
         List<Point> neighbors = nnMap.get(target);
         double total = 0.0;
         for (Point neighbor : neighbors) {
-            total += estimatedValue(neighbor, -1) / Math.sqrt(approximateTimeToTarget(target, neighbor));
+            //total += estimatedValue(neighbor) / Math.pow(approximateTimeToTarget(target, neighbor), 1.0);
         }
         return total / neighbors.size();
     }
@@ -110,12 +139,38 @@ public class Player extends sail.sim.Player {
                 weights.add(-1.0);
             } else {
                 Point target = targets.get(i);
-                int value = estimatedValue(target, i);
-                value += nnAdjustment(target, i);
-                weights.add(value / Math.sqrt(approximateTimeToTarget(groupLocations.get(id), target)));
+                double value = estimatedAmortizedValue(groupLocations.get(id), target, 2, new ArrayList<Point>(), approximateTimeToTarget(groupLocations.get(id), target), estimatedValue(target));
+                weights.add(value);
             }
         }
         return weights;
+    }
+    
+    private Point getNextTarget() {
+        if (!visited_set.get(id).contains(currentTargetIdx)) {
+            return targets.get(currentTargetIdx);
+        } else {
+            List<Point> neighbors = nnMap.get(targets.get(currentTargetIdx));
+            System.out.println(neighbors.size());
+            for (int i = 0; i < neighbors.size(); i++) {
+                Point neighbor = neighbors.get(i);
+                int neighborNum = numOfTarget(neighbor);
+                if (visited_set.get(id).contains(neighborNum)) {
+                    System.out.println("Visited " + i + " already, ignoring");
+                    neighbors.remove(i);
+                    i--;
+                } else {
+                    System.out.println("Target " + i + " is next closest");
+                    currentTargetIdx = numOfTarget(neighbor);
+                    return neighbor;
+                }
+            }
+            for (Point neighbor : nnMap.get(targets.get(currentTargetIdx))) {
+                System.out.println("\t(" + neighbor.x + ", " + neighbor.y + ")");
+            }
+            currentTargetIdx = -1;
+            return initial;
+        }
     }
 
     private List<Point> calculateMoves(List<Point> initialLocations, List<Point> finalLocations) {
@@ -128,83 +183,19 @@ public class Player extends sail.sim.Player {
         }
         return moves;
     }
-    
-    private Point getNextTarget() {
-        Point max = null;
-        double maxweight = 0.0;
-        for (Map.Entry<Integer, Set<Integer>> entry : currentBucket.contained_points.entrySet()) {
-            double value = estimatedValue(targets.get(entry.getKey()), entry.getKey());
-            double weight = value / approximateTimeToTarget(groupLocations.get(id), targets.get(entry.getKey()));
-            if (weight > maxweight) {
-                maxweight = weight;
-                max = targets.get(entry.getKey());
-            }
-        }
-        return max;
-    }
-    
-    private void getNextBucket() {
-        int initiali = (currentBucketi == 0) ? currentBucketi : currentBucketi - 1;
-        int initialj = (currentBucketj == 0) ? currentBucketj : currentBucketj - 1;
-        FrequencyBucket max = frequencyBucket[initiali][initialj];
-        int maxi = initiali;
-        int maxj = initialj;
-        for (int i = initiali; i < initiali + 3 && i < 4; i++) {
-            for (int j = initialj; j < initialj + 3 && j < 4; j++) {
-                FrequencyBucket bucket = frequencyBucket[i][j];
-                if (bucket.total_score > max.total_score) {
-                    max = bucket;
-                    maxi = i;
-                    maxj = j;
-                }
-            }
-        }
-        if (max.total_score == 0) {
-            for (int i = 0; i < 4; i++) {
-                for (int j = 0; j < 4; j++) {
-                    FrequencyBucket bucket = frequencyBucket[i][j];
-                    if (bucket.total_score > max.total_score) {
-                        max = bucket;
-                        maxi = i;
-                        maxj = j;
-                    }
-                }
-            }
-        }
-        if (max.total_score == 0) {
-            this.currentBucket = null;
-        }
-        this.currentBucket = max;
-        int currentBucketi = maxi;
-        int currentBucketj = maxj;
-    }
-    
-    private Point getNextDestination() {
-        if (currentBucket == null) {
-            return initial;
-        }
-        if (currentBucket.total_score > 0) {
-            return getNextTarget();
-        } else {
-            getNextBucket();
-            if (currentBucket == null) {
-                return initial;
-            }
-            return getNextTarget();
-        }
-    }
 
 	private int getClosestTarget(){
 		int smallestIdx = 0;
 
-	/*	for(int i = 1; i<targets.size(); i++){
+		for(int i = 1; i < targets.size(); i++){
 			double time = approximateTimeToTarget(initial, targets.get(i));
-			if(time<approximateTimeToTarget(groupLocations.get(id), targets.get(i))){
+			if(time < approximateTimeToTarget(initial, targets.get(smallestIdx))){
 				//smallest = time;
 				smallestIdx = i;
 			}
-		}*/
-		return 0;
+
+		}
+		return smallestIdx;
 	}
 
   @Override
@@ -238,7 +229,7 @@ public class Player extends sail.sim.Player {
               }
               break;
           case "speed_off_center" :
-              initial = new Point(5.0 + 2*wind_direction.x, 5.0 + 2*wind_direction.y);
+              initial = new Point(5.0 + 1 * wind_direction.x, 5.0 -  1 * wind_direction.y);
               break;
           default :
               initial = new Point(gen.nextDouble()*10, gen.nextDouble()*10);
@@ -252,6 +243,8 @@ public class Player extends sail.sim.Player {
     @Override
     public void init(List<Point> group_locations, List<Point> targets, int id) {
         this.targets = targets;
+        this.targetNumMap = new HashMap<Point, Integer>();
+        buildTargetNumMap(targets);
         this.id = id;
         this.numPlayers = group_locations.size();
         this.prevGroupLocations = group_locations;
@@ -263,45 +256,6 @@ public class Player extends sail.sim.Player {
 		    this.currentTargetIdx = getClosestTarget();
         this.nnMap = new HashMap<Point, List<Point>>();
         calculateNearestNeighbors();
-
-        this.frequencyBucket = new FrequencyBucket[4][4];
-        for (int i = 0; i < this.frequencyBucket[0].length; i++){
-          for (int j = 0; j < this.frequencyBucket.length; j++){
-            double lower_x = ((double) i ) * 2.5;
-            double upper_x = ((double) i + 1 ) * 2.5;
-            double lower_y = ((double) j ) * 2.5;
-            double upper_y = ((double) j + 1 ) * 2.5;
-            this.frequencyBucket[i][j] = new FrequencyBucket(this.numPlayers, this.id, lower_x, upper_x, lower_y, upper_y);
-          }
-        }
-
-        initiateFrequencyBucket(targets);
-        updateFrequencyBucket(visited_set);
-        getNextBucket();
-    }
-
-    public void initiateFrequencyBucket(List<Point> targets){
-      for (int i = 0; i < this.frequencyBucket[0].length; i++){
-        for (int j = 0; j < this.frequencyBucket.length; j++){
-          this.frequencyBucket[i][j].initBucket(targets);
-        }
-      }
-    }
-
-    public void updateFrequencyBucket(Map<Integer, Set<Integer>> visited_set){
-      for (int i = 0; i < this.frequencyBucket[0].length; i++){
-        for (int j = 0; j < this.frequencyBucket.length; j++){
-          this.frequencyBucket[i][j].updateBucket(visited_set);
-        }
-      }
-    }
-
-    public void printFrequencyBucket(){
-      for (int i = 0; i < this.frequencyBucket[0].length; i++){
-        for (int j = 0; j < this.frequencyBucket.length; j++){
-          System.out.print(this.frequencyBucket[i][j]);
-        }
-      }
     }
 
     @Override
@@ -320,22 +274,35 @@ public class Player extends sail.sim.Player {
             //this is if finished visiting all
             return Point.getDirection(group_locations.get(id), initial);
         } else{
-          return moveToDestination(dt);
+//  				List<Double> weights = getTargetWeights();
+//  				int highestIdx = 0;
+//  				for(int i = 0; i < weights.size(); i++){
+//  					if(weights.get(i) > weights.get(highestIdx)){
+//  						highestIdx = i;
+//            }
+//				  }
+//				  currentTargetIdx = highestIdx;
+//            
+          return moveToTarget(dt);
         }
     }
 
-	private Point moveToDestination(double dt){
+	private Point moveToTarget(double dt){
 		Point pos;
 		if(groupLocations == null){
 			pos = initial;
 		}else{
 			pos = groupLocations.get(id);
     }
-		Point target = getNextDestination();
+        Point target = targets.get(currentTargetIdx);
+        if (visited_set.get(id).contains(currentTargetIdx)) {
+            target = getNextTarget();
+        }
 		double straightAngle = Point.angleBetweenVectors(pos, wind_direction);
 		double bestDist = approximateTimeToTarget(pos, target);
 		Point bestPoint = target;
-		double perpAngle = Point.getNorm(wind_direction);
+		Point perp = Point.rotateCounterClockwise(wind_direction,1.59);
+		double perpAngle = Point.angleBetweenVectors(target, perp);
 
 		for(double i = straightAngle; i<=perpAngle; i+= .1){
 			double x = 2.5 * Math.cos(i) - 0.5;
@@ -364,8 +331,6 @@ public class Player extends sail.sim.Player {
     */
     @Override
     public void onMoveFinished(List<Point> group_locations, Map<Integer, Set<Integer>> visited_set) {
-        System.out.println(visited_set);
         this.visited_set = visited_set;
-        updateFrequencyBucket(visited_set);
     }
 }
